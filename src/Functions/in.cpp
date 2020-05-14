@@ -72,11 +72,15 @@ struct FunctionInName<true, true, false>
     static constexpr auto name = "globalNotNullIn";
 };
 
-template <bool negative, bool global, bool null_is_skipped>
+template <bool negative, bool global, bool null_is_skipped, bool ignore_set>
 class FunctionIn : public IFunction
 {
 public:
-    static constexpr auto name = FunctionInName<negative, global, null_is_skipped>::name;
+    /// ignore_set flag means that we don't use set from the second argument, just return zero column.
+    /// It is needed to perform type analysis without creation of set.
+    static constexpr auto name = ignore_set ? FunctionInName<negative, global, null_is_skipped>::name + "IgnoreSet"
+                                            : FunctionInName<negative, global, null_is_skipped>::name;
+
     static FunctionPtr create(const Context &)
     {
         return std::make_shared<FunctionIn>();
@@ -101,9 +105,13 @@ public:
 
     bool useDefaultImplementationForNulls() const override { return null_is_skipped; }
 
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t /*input_rows_count*/) override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t input_rows_count) override
     {
-        /// NOTE: after updating this code, check that FunctionIgnoreExceptNull returns the same type of column.
+        if constexpr (ignore_set)
+        {
+            block.getByPosition(result).column = DataTypeUInt8().createColumnConst(input_rows_count, 0u);
+            return;
+        }
 
         /// Second argument must be ColumnSet.
         ColumnPtr column_set_ptr = block.getByPosition(arguments[1]).column;
@@ -146,17 +154,23 @@ public:
     }
 };
 
+template<bool ignore_set>
+static void registerFunctionsInImpl(FunctionFactory & factory)
+{
+    factory.registerFunction<FunctionIn<false, false, true, ignore_set>>();
+    factory.registerFunction<FunctionIn<false, true, true, ignore_set>>();
+    factory.registerFunction<FunctionIn<true, false, true, ignore_set>>();
+    factory.registerFunction<FunctionIn<true, true, true, ignore_set>>();
+    factory.registerFunction<FunctionIn<false, false, false, ignore_set>>();
+    factory.registerFunction<FunctionIn<false, true, false, ignore_set>>();
+    factory.registerFunction<FunctionIn<true, false, false, ignore_set>>();
+    factory.registerFunction<FunctionIn<true, true, false, ignore_set>>();
+}
 
 void registerFunctionsIn(FunctionFactory & factory)
 {
-    factory.registerFunction<FunctionIn<false, false, true>>();
-    factory.registerFunction<FunctionIn<false, true, true>>();
-    factory.registerFunction<FunctionIn<true, false, true>>();
-    factory.registerFunction<FunctionIn<true, true, true>>();
-    factory.registerFunction<FunctionIn<false, false, false>>();
-    factory.registerFunction<FunctionIn<false, true, false>>();
-    factory.registerFunction<FunctionIn<true, false, false>>();
-    factory.registerFunction<FunctionIn<true, true, false>>();
+    registerFunctionsInImpl<false>(factory);
+    registerFunctionsInImpl<true>(factory);
 }
 
 }
